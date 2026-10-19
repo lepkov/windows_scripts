@@ -1,0 +1,4 @@
+# Runtime logs and test artifacts
+Logs/
+TestOutput/
+*.log

@@ -1,0 +1,58 @@
+# Weekly Maintenance
+
+PowerShell 7 automation utility for performing weekly maintenance on Windows systems.
+
+It orchestrates 5 sequential update stages:
+1. **Windows Update** (via Windows Update Agent COM API, filtering out Previews, Betas, and Insiders)
+2. **Microsoft Store** (via `store.exe updates --apply` with post-installation completion polling)
+3. **Patch My PC Home Updater** (via `PatchMyPC-HomeUpdater.exe /s` with live progress tailing)
+4. **winget** (via `winget upgrade --all --silent --accept-source-agreements --accept-package-agreements`)
+5. **Driver Booster** (interactive manual stage, skipped if `-SkipDriverBooster` is specified)
+
+---
+
+## Quick Start
+
+### Option 1: Batch Launcher
+Double-click **`Run-WeeklyMaintenance.cmd`** or run it from any terminal. It validates PowerShell 7 availability and forwards any command-line arguments to the script.
+
+### Option 2: PowerShell Direct Execution
+Run via PowerShell 7 (`pwsh`):
+
+```powershell
+# Run full weekly maintenance
+pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1
+
+# Run without Driver Booster interactive GUI
+pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster
+
+# Run unattended without asking for a reboot at the end
+pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -NoRebootPrompt
+
+# Combined: skip Driver Booster and do not prompt for reboot
+pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster -NoRebootPrompt
+
+# Retry only Microsoft Store updates
+pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -StoreOnly -NoRebootPrompt
+```
+
+---
+
+## Safety & Features
+
+- **Direct Update**: Automatically executes updates without requiring an `-Apply` switch.
+- **Mutex Protection**: Uses named mutex `Local\WeeklyMaintenanceController` to prevent concurrent executions.
+- **Single UAC Elevation**: Automatically requests administrator rights via `RunAs` in a visible console if launched unelevated.
+- **Safe Reboot Confirmation**: Even if updates indicate a reboot is pending, a reboot is only triggered if the user explicitly types **`RESTART`** (case-sensitive). Any other input or pressing Enter continues without rebooting.
+- **Clean UTF-8 Output**: Explicit UTF-8 stream handling ensures clean output across localized Windows consoles.
+- **Structured Logs**: Runtime logs and JSON summaries (`summary.json`, `windows-candidates.json`, `windows-installation.json`, `patch-results.json`) are stored in `Logs/run-<timestamp>-<id>/`.
+
+---
+
+## Testing
+
+Run the offline unit test suite:
+
+```powershell
+pwsh -NoProfile -File .\Test-WeeklyMaintenance.ps1
+```
