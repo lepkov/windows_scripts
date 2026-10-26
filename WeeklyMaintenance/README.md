@@ -16,8 +16,10 @@ It orchestrates 5 sequential update stages:
 ### Option 1: Batch Launcher
 Double-click **`Run-WeeklyMaintenance.cmd`** or run it from any terminal. It validates PowerShell 7 availability and forwards any command-line arguments to the script.
 
+The launcher prefers an existing non-Store PowerShell installation: the MSI installation under Program Files, then Codex's bundled portable runtime when present. This prevents a Store PowerShell update from closing the updater itself. Direct execution in Store-managed PowerShell is rejected before updates start. `Run-WeeklyMaintenance.cmd --runtime-path` prints the selected runtime without installing anything.
+
 ### Option 2: PowerShell Direct Execution
-Run via PowerShell 7 (`pwsh`):
+Run via a non-Store PowerShell 7 runtime (`pwsh`); use the batch launcher if your default `pwsh` comes from Microsoft Store:
 
 ```powershell
 # Run full weekly maintenance

@@ -367,6 +367,11 @@ function Test-IsAdministrator {
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Test-StorePowerShellHost {
+    param([Parameter(Mandatory)][string]$RuntimeHome)
+    $RuntimeHome -match '(?i)[\\/]WindowsApps[\\/]Microsoft\.PowerShell_'
+}
+
 function Get-MaintenanceStageOrder {
     param([switch]$StoreOnly)
     if ($StoreOnly) { return 'Microsoft Store' }
@@ -389,6 +394,9 @@ function Request-MaintenanceElevation {
 function Start-Maintenance {
     if (-not $IsWindows) { throw 'This script requires Windows and PowerShell 7.' }
     $ErrorActionPreference = 'Stop'
+    if (Test-StorePowerShellHost $PSHOME) {
+        throw 'Microsoft Store can terminate its PowerShell host while updating it. Use Run-WeeklyMaintenance.cmd with a non-Store PowerShell 7 runtime (MSI or portable).'
+    }
     if (-not (Test-IsAdministrator)) {
         Request-MaintenanceElevation -ScriptPath $PSCommandPath -SkipDriverBooster:$SkipDriverBooster -NoRebootPrompt:$NoRebootPrompt -StoreOnly:$StoreOnly
         return

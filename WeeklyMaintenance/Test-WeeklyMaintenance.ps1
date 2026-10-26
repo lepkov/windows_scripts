@@ -174,4 +174,10 @@ try {
     if ($startProcessImplementation) { Set-Item function:Start-Process $startProcessImplementation.ScriptBlock }
 }
 
+Assert-Equal (Test-StorePowerShellHost 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.9.0_x64__8wekyb3d8bbwe') $true 'Identify a Store PowerShell host that Store updates can terminate'
+Assert-Equal (Test-StorePowerShellHost 'C:\Program Files\PowerShell\7') $false 'Allow the MSI PowerShell runtime'
+Assert-Equal (Test-StorePowerShellHost 'C:\Users\ADM\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell') $false 'Allow the existing portable runtime outside Store'
+$runtimeCapture = Invoke-NativeCapture -Executable $env:ComSpec -Arguments @('/d','/c','call',(Join-Path $PSScriptRoot 'Run-WeeklyMaintenance.cmd'),'--runtime-path')
+Assert-Equal $runtimeCapture.ExitCode 0 'Resolve the launcher runtime without starting updates'
+Assert-Equal ((Test-Path -LiteralPath $runtimeCapture.Output.Trim()) -and $runtimeCapture.Output.Trim() -notmatch '\\WindowsApps\\') $true 'Launcher selects an existing runtime outside Microsoft Store'
 Write-Host "PASS: $script:Checks assertions; no update installers or reboot commands executed."
