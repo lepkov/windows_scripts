@@ -41,6 +41,8 @@ Assert-Equal (Get-StorePendingCount 'All your apps are up to date.') 0 'Parse st
 Assert-Equal (Get-StorePendingCount 'No app updates available.') 0 'Parse store no updates'
 Assert-Equal (Get-StorePendingCount 'Нет доступных обновлений.') 0 'Parse store up to date russian'
 Assert-Equal (Get-StorePendingCount 'Random output') $null 'Return null on unrecognized store output'
+Assert-Equal (Get-StorePendingCount 'Updates started (2)') 2 'Queued installations are still pending, not completed'
+Assert-Equal (Get-StorePendingCount "No updates found.`nFailed to read input in non-interactive mode.") $null 'Do not accept an empty-queue message accompanied by an input failure'
 
 # 4. Patch My PC summary parsing
 $patchLog = @(
@@ -54,6 +56,11 @@ $parsed = Get-PatchUpdateSummary $patchLog
 Assert-Equal ($parsed.UpdatedApps -join ',') 'Foo,Bar' 'Deduplicate updated apps'
 Assert-Equal $parsed.HasErrors $true 'Detect errors in Patch My PC log'
 Assert-Equal $parsed.Errors.Count 1 'Capture error lines'
+$warningOnly = Get-PatchUpdateSummary @(
+    "[2026-10-26 14:04:52]  WARNING  [OBS Studio]: Unable to remove installer due to error - file in use.",
+    '[2026-10-26 14:05:23]  INFO  Application OBS Studio has been successfully updated'
+)
+Assert-Equal $warningOnly.HasErrors $false 'A warning containing the word error is not an ERROR severity record'
 
 # 5. Maintenance stage ordering
 $defaultOrder = Get-MaintenanceStageOrder
@@ -111,6 +118,17 @@ try {
 # 9. Store stage & completion waiting
 $testOutput = Join-Path $PSScriptRoot 'TestOutput'
 $null = New-Item -ItemType Directory -Path $testOutput -Force
+$dataFixture = Join-Path $testOutput 'fixture-local.dat'
+if (Test-Path -LiteralPath $dataFixture) { Remove-Item -LiteralPath $dataFixture -Force }
+[IO.File]::WriteAllText($dataFixture, 'preserve data')
+$dataAttributes = [IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::Archive -bor [IO.FileAttributes]::NotContentIndexed
+[IO.File]::SetAttributes($dataFixture, $dataAttributes)
+Repair-PatchDataAttributes -Path $dataFixture
+Assert-Equal ([IO.File]::GetAttributes($dataFixture)) ($dataAttributes -band (-bnot [IO.FileAttributes]::Hidden)) 'Clear only Hidden before the vendor overwrites its data file'
+Assert-Equal ([IO.File]::ReadAllText($dataFixture)) 'preserve data' 'Preserve Patch My PC data bytes'
+[IO.File]::WriteAllText($dataFixture, 'write works')
+Repair-PatchDataAttributes -Path $dataFixture
+Assert-Equal ([IO.File]::ReadAllText($dataFixture)) 'write works' 'Repair is idempotent and allows the vendor overwrite'
 $progressLog = Join-Path $testOutput 'fixture-updater.log'
 'old record: ignore this' | Set-Content -LiteralPath $progressLog
 $escapedLog = $progressLog.Replace("'","''")
@@ -118,6 +136,24 @@ $appendCommand = "[IO.File]::AppendAllText('$escapedLog', '[INFO] Application Fi
 $progressCapture = Invoke-NativeCapture -Executable (Join-Path $PSHOME 'pwsh.exe') -Arguments @('-NoProfile','-Command',$appendCommand) -LogTailPath $progressLog
 Assert-Equal $progressCapture.ProgressLines.Count 1 'Capture only newly appended updater log records'
 Assert-Equal (Get-PatchUpdateSummary $progressCapture.ProgressLines).UpdatedApps[0] 'Fixture App' 'Collect per-application success while native updater runs'
+$exclusiveLog = Join-Path $testOutput 'fixture-exclusive-updater.log'
+'old record' | Set-Content -LiteralPath $exclusiveLog
+$exclusivePath = $exclusiveLog.Replace("'","''")
+$exclusiveCommand = '$ErrorActionPreference="Stop"; $file=[IO.File]::Open(''' + $exclusivePath + ''',[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $writer=[IO.StreamWriter]::new($file); $writer.WriteLine(''[INFO] Application Exclusive Writer has been successfully updated''); $writer.Dispose() } finally { $file.Dispose() }'
+$exclusiveCapture = Invoke-NativeCapture -Executable (Join-Path $PSHOME 'pwsh.exe') -Arguments @('-NoProfile','-Command',$exclusiveCommand) -LogTailPath $exclusiveLog
+Assert-Equal $exclusiveCapture.ExitCode 0 'Log monitoring must not hold a lock that blocks an exclusive updater writer'
+Assert-Equal (Get-PatchUpdateSummary $exclusiveCapture.ProgressLines).UpdatedApps[0] 'Exclusive Writer' 'Capture updater results after its exclusive writer closes'
+$partialLog = Join-Path $testOutput 'fixture-partial-progress.log'
+[IO.File]::WriteAllText($partialLog, '[INFO] Обновление', [Text.UTF8Encoding]::new($false))
+$partialState = @{Offset=0L}
+$partialLines = [Collections.Generic.List[string]]::new()
+Read-UpdaterProgress -LogTailPath $partialLog -State $partialState -Lines $partialLines
+Assert-Equal $partialLines.Count 0 'Do not consume a partial UTF-8 log record'
+[IO.File]::AppendAllText($partialLog, " завершено`n", [Text.UTF8Encoding]::new($false))
+Read-UpdaterProgress -LogTailPath $partialLog -State $partialState -Lines $partialLines
+Assert-Equal $partialLines[0] '[INFO] Обновление завершено' 'Preserve UTF-8 across appended log fragments'
+Read-UpdaterProgress -LogTailPath $partialLog -State $partialState -Lines $partialLines
+Assert-Equal $partialLines.Count 1 'Do not duplicate log records when polling'
 
 $nativeImplementation = ${function:Invoke-NativeCapture}
 try {
@@ -128,12 +164,12 @@ try {
     }
     $storeResult = Invoke-StoreStage -LogDirectory $testOutput
     Assert-Equal $storeResult.Status 'NeedsAttention' 'Zero Store exit code with failure is not verified success'
-    Assert-Equal ($script:CapturedArgs -join ';') 'updates --apply;updates' 'Apply followed by non-applying verification scan'
+    Assert-Equal ($script:CapturedArgs -join ';') 'updates --apply;updates --apply' 'Every Store call is non-interactive, including completion checks'
 
     $script:StoreScanNumber = 0
     function Invoke-NativeCapture($Executable, $Arguments) {
         $script:StoreScanNumber++
-        [pscustomobject]@{ ExitCode=0; Output=$(if ($script:StoreScanNumber -eq 1) { 'Updates available (1 found)' } else { 'No updates available.' }) }
+        [pscustomobject]@{ ExitCode=0; Output=$(if ($script:StoreScanNumber -eq 1) { 'Updates started (1)' } else { 'No updates found.' }) }
     }
     $storeResult = Wait-StoreCompletion -Executable 'fixture-store.exe' -LogDirectory $testOutput -VerificationAttempts 2 -DelaySeconds 0
     Assert-Equal $storeResult.Status 'Verified' 'Wait for queued Store installations instead of failing immediately'

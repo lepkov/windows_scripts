@@ -93,12 +93,39 @@ function Invoke-MaintenanceStages {
 }
 
 function Read-UpdaterProgress {
-    param([IO.StreamReader]$Reader, [Collections.Generic.List[string]]$Lines)
-    if (-not $Reader) { return }
-    while ($null -ne ($line = $Reader.ReadLine())) {
-        $Lines.Add($line)
-        if ($line -match 'INFO|ERROR|WARN|Started installing|downloaded successfully|installer exit code') {
-            Write-Host "[Patch My PC] $line"
+    param([string]$LogTailPath, [hashtable]$State, [Collections.Generic.List[string]]$Lines)
+    if (-not $LogTailPath -or -not (Test-Path -LiteralPath $LogTailPath)) { return }
+    $stream = $null
+    try {
+        $length = (Get-Item -LiteralPath $LogTailPath).Length
+        if ($length -lt $State.Offset) { $State.Offset = 0L }
+        if ($length -eq $State.Offset) { return }
+        $stream = [IO.File]::Open($LogTailPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        $null = $stream.Seek($State.Offset, [IO.SeekOrigin]::Begin)
+        $size = [int][Math]::Min(1048576, [Math]::Max(0, $stream.Length - $State.Offset))
+        if (-not $size) { return }
+        $buffer = [byte[]]::new($size)
+        $count = $stream.Read($buffer, 0, $size)
+        $lastNewline = -1
+        for ($index = $count - 1; $index -ge 0; $index--) {
+            if ($buffer[$index] -eq 10) { $lastNewline = $index; break }
+        }
+        # Leave partial UTF-8 records unread until the writer finishes the line.
+        if ($lastNewline -lt 0) { return }
+        $text = [Text.Encoding]::UTF8.GetString($buffer, 0, $lastNewline + 1)
+        $State.Offset += $lastNewline + 1
+    } catch [IO.IOException] {
+        # The vendor can own an exclusive handle. Retry after it releases the file.
+        return
+    } finally {
+        if ($stream) { $stream.Dispose() }
+    }
+    foreach ($line in ($text -split '\r?\n')) {
+        if ($line.Length) {
+            $Lines.Add($line)
+            if ($line -match 'INFO|ERROR|WARN|Started installing|downloaded successfully|installer exit code') {
+                Write-Host "[Patch My PC] $line"
+            }
         }
     }
 }
@@ -118,12 +145,10 @@ function Invoke-NativeCapture {
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
     $progressLines = [Collections.Generic.List[string]]::new()
-    $logReader = $null
+    $logState = @{ Offset = 0L }
     try {
         if ($LogTailPath -and (Test-Path -LiteralPath $LogTailPath)) {
-            $logStream = [IO.File]::Open($LogTailPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
-            $null = $logStream.Seek(0, [IO.SeekOrigin]::End)
-            $logReader = [IO.StreamReader]::new($logStream, [Text.Encoding]::UTF8, $true)
+            $logState.Offset = (Get-Item -LiteralPath $LogTailPath).Length
         }
         $null = $process.Start()
         # Never accept an install prompt accidentally.
@@ -135,7 +160,7 @@ function Invoke-NativeCapture {
         $ended = @($false, $false)
         # Drain both streams concurrently and print progress into the visible console/transcript.
         while (-not ($ended[0] -and $ended[1])) {
-            Read-UpdaterProgress -Reader $logReader -Lines $progressLines
+            Read-UpdaterProgress -LogTailPath $LogTailPath -State $logState -Lines $progressLines
             $received = $false
             for ($index = 0; $index -lt 2; $index++) {
                 if (-not $ended[$index] -and $tasks[$index].IsCompleted) {
@@ -153,10 +178,9 @@ function Invoke-NativeCapture {
             if (-not $received) { Start-Sleep -Milliseconds 100 }
         }
         $process.WaitForExit()
-        Read-UpdaterProgress -Reader $logReader -Lines $progressLines
+        Read-UpdaterProgress -LogTailPath $LogTailPath -State $logState -Lines $progressLines
         [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output.ToString(); ProgressLines = $progressLines.ToArray() }
     } finally {
-        if ($logReader) { $logReader.Dispose() }
         $process.Dispose()
     }
 }
@@ -270,7 +294,9 @@ function Invoke-WindowsStage {
 
 function Get-StorePendingCount {
     param([string]$Output)
+    if ($Output -match '(?im)^\s*(?:Failed|Error|Ошибка)\b') { return $null }
     if ($Output -match '(?i)Updates available\s*\((\d+) found\)') { return [int]$Matches[1] }
+    if ($Output -match '(?i)Updates started\s*\((\d+)\)') { return [int]$Matches[1] }
     if ($Output -match '(?i)no (?:app )?updates (?:are )?(?:available|found)|all (?:your )?apps are up.to.date|нет доступных обновлений|обновления не найдены') { return 0 }
     return $null
 }
@@ -299,17 +325,31 @@ function Wait-StoreCompletion {
         Start-Sleep -Seconds $InitialDelaySeconds
     }
     for ($attempt = 1; $attempt -le $VerificationAttempts; $attempt++) {
-        $verify = Invoke-NativeCapture $Executable @('updates')
+        # Bare `store updates` prompts even with redirected stdin. Explicit apply
+        # retries remaining updates without a prompt; a queued update is not completion.
+        $verify = Invoke-NativeCapture $Executable @('updates', '--apply')
         $verify.Output | Set-Content -LiteralPath (Join-Path $LogDirectory 'store-verification.txt') -Encoding utf8
         $remaining = Get-StorePendingCount $verify.Output
         if ($verify.ExitCode -ne 0 -or $null -eq $remaining) { break }
         if ($remaining -eq 0) {
             return New-StageResult 'Microsoft Store' 'Verified' 'Follow-up Store scan reports no available updates'
         }
-        Write-Host "$remaining Store update(s) still pending; waiting for queued installations ($attempt/$VerificationAttempts)."
+        Write-Host "$remaining Store update(s) still queued; non-interactive retry requested ($attempt/$VerificationAttempts)."
         if ($attempt -lt $VerificationAttempts) { Start-Sleep -Seconds $DelaySeconds }
     }
     New-StageResult 'Microsoft Store' 'NeedsAttention' 'Store verification did not reach an empty queue; inspect store-output.txt and store-verification.txt'
+}
+
+function Repair-PatchDataAttributes {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    $attributes = [IO.File]::GetAttributes($Path)
+    if ($attributes -band [IO.FileAttributes]::Hidden) {
+        # Home Updater marks local.dat Hidden, then its next overwrite can fail
+        # with UnauthorizedAccessException. Preserve all other attributes and data.
+        [IO.File]::SetAttributes($Path, $attributes -band (-bnot [IO.FileAttributes]::Hidden))
+        Write-Host 'Cleared Hidden on Patch My PC local.dat so the updater can overwrite it.'
+    }
 }
 
 function Invoke-PatchStage {
@@ -319,6 +359,7 @@ function Invoke-PatchStage {
     if (@(Get-Process -Name PatchMyPC-HomeUpdater -ErrorAction SilentlyContinue).Count) {
         return New-StageResult 'Patch My PC' 'NeedsAttention' 'Already running; close it before rerunning this script. A second instance could return before updates finish.'
     }
+    Repair-PatchDataAttributes -Path (Join-Path $env:ProgramData 'PatchMyPC\local.dat')
     $vendorLog = Join-Path $env:ProgramData 'PatchMyPC\PatchMyPCHomeUpdater.log'
     Write-Host 'Following the Patch My PC log: downloads, installation results and updated application names.'
     $result = Invoke-NativeCapture $path @('/s') -LogTailPath $vendorLog
@@ -344,7 +385,8 @@ function Get-PatchUpdateSummary {
         if ($line -match 'Application (.+) has been successfully updated') {
             if (-not $updated.Contains($Matches[1])) { $updated.Add($Matches[1]) }
         }
-        if ($line -match '\bERROR\b') { $errors.Add($line) }
+        # Match the severity field, not the word "error" inside a WARNING message.
+        if ($line -match '^\s*(?:\[?\d{4}-\d{2}-\d{2} [\d:.+-]+\]?\s*)?(?:\[ERROR\]|ERROR)(?:\s|$)') { $errors.Add($line) }
     }
     [pscustomobject]@{ UpdatedApps = $updated.ToArray(); HasErrors = ($errors.Count -gt 0); Errors = $errors.ToArray() }
 }
