@@ -64,7 +64,7 @@ Assert-Equal $warningOnly.HasErrors $false 'A warning containing the word error 
 
 # 5. Maintenance stage ordering
 $defaultOrder = Get-MaintenanceStageOrder
-Assert-Equal ($defaultOrder -join ';') 'Windows Update;Microsoft Store;Patch My PC;winget;Driver Booster' 'Standard stage ordering'
+Assert-Equal ($defaultOrder -join ';') 'Windows Update;Microsoft Store;Patch My PC;winget;Codex CLI;Driver Booster' 'Standard stage ordering'
 $storeOnlyOrder = Get-MaintenanceStageOrder -StoreOnly
 Assert-Equal $storeOnlyOrder 'Microsoft Store' 'Store only stage ordering'
 
@@ -176,7 +176,24 @@ try {
     Assert-Equal $script:StoreScanNumber 2 'Rescan after Store reports remaining queued update'
 } finally { Set-Item -Path function:Invoke-NativeCapture -Value $nativeImplementation }
 
-# 10. Driver Booster skip option
+# 10. Codex CLI and Driver Booster skip options
+Assert-Equal (Invoke-CodexCliStage -LogDirectory $testOutput -Skip).Status 'Skipped' 'Skip Codex CLI stage when switch is passed'
+
+$nativeImplementation = ${function:Invoke-NativeCapture}
+try {
+    $script:CodexArgs = $null
+    function Invoke-NativeCapture($Executable, $Arguments) {
+        $script:CodexArgs = $Arguments -join ' '
+        [pscustomobject]@{ ExitCode = 0; Output = "==> Installing`nCodex CLI 0.160.1 installed successfully." }
+    }
+    $codexResult = Invoke-CodexCliStage -LogDirectory $testOutput
+    Assert-Equal $codexResult.Status 'Updated' 'Codex CLI reports Updated on successful installation'
+    Assert-Equal $codexResult.Detail 'Codex CLI 0.160.1 installed successfully' 'Codex CLI reports version details'
+    Assert-Equal ($script:CodexArgs -match 'chatgpt\.com/codex/install\.ps1') $true 'Invoke Codex install script'
+    Assert-Equal ($script:CodexArgs -match 'CODEX_NON_INTERACTIVE') $true 'Enforce non-interactive execution for Codex installer'
+} finally { Set-Item -Path function:Invoke-NativeCapture -Value $nativeImplementation }
+
+# 10b. Driver Booster skip option
 Assert-Equal (Invoke-DriverStage -Skip).Status 'Skipped' 'Skip driver stage without launching GUI'
 
 # 11. Elevation without launching process
@@ -195,14 +212,14 @@ try {
         $fake | Add-Member ScriptMethod Dispose { }
         $fake
     }
-    Request-MaintenanceElevation -ScriptPath $script:MaintenanceScriptPath -NoRebootPrompt -StoreOnly
+    Request-MaintenanceElevation -ScriptPath $script:MaintenanceScriptPath -NoRebootPrompt -StoreOnly -SkipCodexCli
     Assert-Equal $script:ElevationCalls 1 'Elevate complete run only once'
     $decoded = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($script:WorkerArguments[-1]))
     $tokens=$null; $parseErrors=$null
     $null = [Management.Automation.Language.Parser]::ParseInput($decoded,[ref]$tokens,[ref]$parseErrors)
     Assert-Equal @($parseErrors).Count 0 'Worker invocation parses even with apostrophe in path'
     Assert-Equal ($decoded -match "apostrophe''s") $true 'Quote paths without code injection'
-    Assert-Equal ($decoded -match '-StoreOnly' -and $decoded -match '-NoRebootPrompt') $true 'Preserve run options across single elevation'
+    Assert-Equal ($decoded -match '-StoreOnly' -and $decoded -match '-NoRebootPrompt' -and $decoded -match '-SkipCodexCli') $true 'Preserve run options across single elevation'
     Assert-Equal ($decoded -match '-Apply') $false 'Do not pass obsolete -Apply flag'
     Assert-Equal ($decoded -match '-Worker') $false 'Do not spawn elevated stage workers'
 } finally {

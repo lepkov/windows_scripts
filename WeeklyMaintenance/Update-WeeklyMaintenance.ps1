@@ -1,14 +1,15 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-Weekly Windows maintenance script: updates Windows, Microsoft Store apps, Patch My PC apps, winget packages, and Driver Booster drivers.
+Weekly Windows maintenance script: updates Windows, Microsoft Store apps, Patch My PC apps, winget packages, Codex CLI, and Driver Booster drivers.
 .EXAMPLE
 pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1
-pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster -NoRebootPrompt
+pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster -SkipCodexCli -NoRebootPrompt
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipDriverBooster,
+    [switch]$SkipCodexCli,
     [switch]$NoRebootPrompt,
     [switch]$StoreOnly,
     [string]$ExpectedUserSid
@@ -404,6 +405,27 @@ function Invoke-WingetStage {
     New-StageResult winget 'CommandCompleted' 'See winget-output.txt for package results; pins and unknown-version defaults preserved' (($result.ExitCode -eq 3010) -or (Get-RebootState))
 }
 
+function Invoke-CodexCliStage {
+    param([Parameter(Mandatory)][string]$LogDirectory, [switch]$Skip)
+    if ($Skip) { return New-StageResult 'Codex CLI' 'Skipped' 'Skipped by command-line option' }
+    $path = (Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue)?.Source
+    if (-not $path) {
+        $path = (Get-Command pwsh.exe -CommandType Application -ErrorAction Stop).Source
+    }
+    $command = '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $env:CODEX_NON_INTERACTIVE = "1"; irm https://chatgpt.com/codex/install.ps1 | iex'
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $command)
+    $result = Invoke-NativeCapture $path $arguments
+    $result.Output | Set-Content -LiteralPath (Join-Path $LogDirectory 'codex-output.txt') -Encoding utf8
+    if ($result.ExitCode -ne 0) { throw "Codex CLI installation returned $($result.ExitCode); see codex-output.txt" }
+    $status = if ($result.Output -match 'installed successfully') { 'Updated' } else { 'CommandCompleted' }
+    $detail = if ($result.Output -match 'Codex CLI ([^\r\n]+) installed successfully') {
+        "Codex CLI $($Matches[1]) installed successfully"
+    } else {
+        'Codex CLI installation completed; see codex-output.txt'
+    }
+    New-StageResult 'Codex CLI' $status $detail (Get-RebootState)
+}
+
 function Test-IsAdministrator {
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -417,15 +439,16 @@ function Test-StorePowerShellHost {
 function Get-MaintenanceStageOrder {
     param([switch]$StoreOnly)
     if ($StoreOnly) { return 'Microsoft Store' }
-    @('Windows Update', 'Microsoft Store', 'Patch My PC', 'winget', 'Driver Booster')
+    @('Windows Update', 'Microsoft Store', 'Patch My PC', 'winget', 'Codex CLI', 'Driver Booster')
 }
 
 function Request-MaintenanceElevation {
-    param([string]$ScriptPath, [switch]$SkipDriverBooster, [switch]$NoRebootPrompt, [switch]$StoreOnly)
+    param([string]$ScriptPath, [switch]$SkipDriverBooster, [switch]$SkipCodexCli, [switch]$NoRebootPrompt, [switch]$StoreOnly)
     $quotedPath = $ScriptPath.Replace("'", "''")
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $command = "& '$quotedPath' -ExpectedUserSid '$sid'"
     if ($SkipDriverBooster) { $command += ' -SkipDriverBooster' }
+    if ($SkipCodexCli) { $command += ' -SkipCodexCli' }
     if ($NoRebootPrompt) { $command += ' -NoRebootPrompt' }
     if ($StoreOnly) { $command += ' -StoreOnly' }
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
@@ -440,7 +463,7 @@ function Start-Maintenance {
         throw 'Microsoft Store can terminate its PowerShell host while updating it. Use Run-WeeklyMaintenance.cmd with a non-Store PowerShell 7 runtime (MSI or portable).'
     }
     if (-not (Test-IsAdministrator)) {
-        Request-MaintenanceElevation -ScriptPath $PSCommandPath -SkipDriverBooster:$SkipDriverBooster -NoRebootPrompt:$NoRebootPrompt -StoreOnly:$StoreOnly
+        Request-MaintenanceElevation -ScriptPath $PSCommandPath -SkipDriverBooster:$SkipDriverBooster -SkipCodexCli:$SkipCodexCli -NoRebootPrompt:$NoRebootPrompt -StoreOnly:$StoreOnly
         return
     }
     if ($ExpectedUserSid -and [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $ExpectedUserSid) {
@@ -464,6 +487,7 @@ function Start-Maintenance {
                     'Microsoft Store' { { Invoke-StoreStage -LogDirectory $runPath } }
                     'Patch My PC' { { Invoke-PatchStage -LogDirectory $runPath } }
                     'winget' { { Invoke-WingetStage -LogDirectory $runPath } }
+                    'Codex CLI' { { Invoke-CodexCliStage -LogDirectory $runPath -Skip:$SkipCodexCli } }
                     'Driver Booster' { { Invoke-DriverStage -Skip:$SkipDriverBooster } }
                 }
             }

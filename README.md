@@ -6,7 +6,7 @@ A collection of PowerShell, Batch, and VBScript automation scripts for Windows a
 
 | Script / Directory | Type | Description |
 | --- | --- | --- |
-| [`WeeklyMaintenance/`](#weeklymaintenance) | Suite | Comprehensive weekly update automation suite for Windows, Store, winget, Patch My PC, and Driver Booster. |
+| [`WeeklyMaintenance/`](#weeklymaintenance) | Suite | Comprehensive weekly update automation suite for Windows, Store, winget, Codex CLI, Patch My PC, and Driver Booster. |
 | [`AOVPN/`](#aovpn) | Suite | Always On VPN client configuration scripts, XML profile templates, and deployment instructions. |
 | [`add_PC_to_domain.ps1`](#add_pc_to_domainps1) | PowerShell | Joins a local Windows machine to an Active Directory domain with specified credentials. |
 | [`AWS_EC2_Get_Public_IPv4.ps1`](#aws_ec2_get_public_ipv4ps1) | PowerShell | Queries AWS EC2 Instance Metadata Service (IMDS) to retrieve the public IPv4 address. |
@@ -32,9 +32,9 @@ A collection of PowerShell, Batch, and VBScript automation scripts for Windows a
 
 ### WeeklyMaintenance/
 Comprehensive weekly Windows maintenance and update automation suite located in `WeeklyMaintenance/`.
-- Orchestrates sequential updates across Windows Update (WUA API), Microsoft Store (`store.exe`), Patch My PC Home Updater, winget, and Driver Booster.
+- Orchestrates sequential updates across Windows Update (WUA API), Microsoft Store (`store.exe`), Patch My PC Home Updater, winget, Codex CLI, and Driver Booster.
 - Direct update execution via `Run-WeeklyMaintenance.cmd` or PowerShell 7 (`Update-WeeklyMaintenance.ps1`).
-- Includes safety mechanisms: named mutex (`Local\WeeklyMaintenanceController`) against concurrent runs, safe reboot prompt (requires exact `RESTART` confirmation), optional Driver Booster skip (`-SkipDriverBooster`), and structured logging in `Logs/`.
+- Includes safety mechanisms: named mutex (`Local\WeeklyMaintenanceController`) against concurrent runs, safe reboot prompt (requires exact `RESTART` confirmation), optional Driver Booster skip (`-SkipDriverBooster`), optional Codex CLI skip (`-SkipCodexCli`), and structured logging in `Logs/`.
 - Offline test suite in `WeeklyMaintenance/Test-WeeklyMaintenance.ps1`.
 
 ### AOVPN/
