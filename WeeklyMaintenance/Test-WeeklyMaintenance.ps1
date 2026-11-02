@@ -65,8 +65,6 @@ Assert-Equal $warningOnly.HasErrors $false 'A warning containing the word error 
 # 5. Maintenance stage ordering
 $defaultOrder = Get-MaintenanceStageOrder
 Assert-Equal ($defaultOrder -join ';') 'Windows Update;Microsoft Store;Patch My PC;winget;Codex CLI;Driver Booster' 'Standard stage ordering'
-$storeOnlyOrder = Get-MaintenanceStageOrder -StoreOnly
-Assert-Equal $storeOnlyOrder 'Microsoft Store' 'Store only stage ordering'
 
 # 6. Exit code mapping
 $cleanSummary = [pscustomobject]@{ Stages = @((New-StageResult 'A' 'Updated' 'ok'), (New-StageResult 'B' 'AlreadyCurrent' 'ok')) }
@@ -91,17 +89,19 @@ $summary = Invoke-MaintenanceStages -Actions $actions `
     -RestartAction { $script:restartCalled = $true } `
     -OnCompleted { param($s) Assert-Equal $s.Stages.Count 3 'OnCompleted sees all stages' }
 Assert-Equal ($orderLog -join ';') 'First;Broken;Last' 'Pipeline continues after a stage exception'
-Assert-Equal $script:promptCalled $true 'Prompt invoked when NoRebootPrompt is omitted'
+Assert-Equal $script:promptCalled $true 'Prompt always invoked after stages'
 Assert-Equal $script:restartCalled $true 'Restart action executed when RESTART confirmed'
 Assert-Equal $summary.Stages[1].Status 'Failed' 'Pipeline records failed stage'
 
-# Verify NoRebootPrompt suppresses prompt
+# Verify non-RESTART answer does not restart
 $script:promptCalled2 = $false
-$summary2 = Invoke-MaintenanceStages -Actions $actions -NoRebootPrompt `
-    -PromptAction { $script:promptCalled2 = $true; 'RESTART' } `
-    -RestartAction { } `
+$script:restartCalled2 = $false
+$summary2 = Invoke-MaintenanceStages -Actions $actions `
+    -PromptAction { $script:promptCalled2 = $true; 'CONTINUE' } `
+    -RestartAction { $script:restartCalled2 = $true } `
     -OnCompleted { param($s) }
-Assert-Equal $script:promptCalled2 $false 'NoRebootPrompt suppresses prompt'
+Assert-Equal $script:promptCalled2 $true 'Prompt invoked without restart'
+Assert-Equal $script:restartCalled2 $false 'Restart not executed without RESTART confirmation'
 
 # 8. Native capture and UTF-8 handling
 $capture = Invoke-NativeCapture -Executable (Join-Path $PSHOME 'pwsh.exe') -Arguments @('-NoProfile','-Command','[Console]::Out.WriteLine("fixture output"); [Console]::Error.WriteLine("fixture error"); exit 7')
@@ -176,9 +176,7 @@ try {
     Assert-Equal $script:StoreScanNumber 2 'Rescan after Store reports remaining queued update'
 } finally { Set-Item -Path function:Invoke-NativeCapture -Value $nativeImplementation }
 
-# 10. Codex CLI and Driver Booster skip options
-Assert-Equal (Invoke-CodexCliStage -LogDirectory $testOutput -Skip).Status 'Skipped' 'Skip Codex CLI stage when switch is passed'
-
+# 10. Codex CLI stage
 $nativeImplementation = ${function:Invoke-NativeCapture}
 try {
     $script:CodexArgs = $null
@@ -192,9 +190,6 @@ try {
     Assert-Equal ($script:CodexArgs -match 'chatgpt\.com/codex/install\.ps1') $true 'Invoke Codex install script'
     Assert-Equal ($script:CodexArgs -match 'CODEX_NON_INTERACTIVE') $true 'Enforce non-interactive execution for Codex installer'
 } finally { Set-Item -Path function:Invoke-NativeCapture -Value $nativeImplementation }
-
-# 10b. Driver Booster skip option
-Assert-Equal (Invoke-DriverStage -Skip).Status 'Skipped' 'Skip driver stage without launching GUI'
 
 # 11. Elevation without launching process
 $startProcessImplementation = Get-Item function:Start-Process -ErrorAction SilentlyContinue
@@ -212,14 +207,14 @@ try {
         $fake | Add-Member ScriptMethod Dispose { }
         $fake
     }
-    Request-MaintenanceElevation -ScriptPath $script:MaintenanceScriptPath -NoRebootPrompt -StoreOnly -SkipCodexCli
+    Request-MaintenanceElevation -ScriptPath $script:MaintenanceScriptPath
     Assert-Equal $script:ElevationCalls 1 'Elevate complete run only once'
     $decoded = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($script:WorkerArguments[-1]))
     $tokens=$null; $parseErrors=$null
     $null = [Management.Automation.Language.Parser]::ParseInput($decoded,[ref]$tokens,[ref]$parseErrors)
     Assert-Equal @($parseErrors).Count 0 'Worker invocation parses even with apostrophe in path'
     Assert-Equal ($decoded -match "apostrophe''s") $true 'Quote paths without code injection'
-    Assert-Equal ($decoded -match '-StoreOnly' -and $decoded -match '-NoRebootPrompt' -and $decoded -match '-SkipCodexCli') $true 'Preserve run options across single elevation'
+    Assert-Equal ($decoded.Trim()) "& '$($script:MaintenanceScriptPath.Replace("'", "''"))'" 'Worker command invokes script path'
     Assert-Equal ($decoded -match '-Apply') $false 'Do not pass obsolete -Apply flag'
     Assert-Equal ($decoded -match '-Worker') $false 'Do not spawn elevated stage workers'
 } finally {
@@ -227,9 +222,6 @@ try {
     if ($startProcessImplementation) { Set-Item function:Start-Process $startProcessImplementation.ScriptBlock }
 }
 
-Assert-Equal (Test-StorePowerShellHost 'C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.9.0_x64__8wekyb3d8bbwe') $true 'Identify a Store PowerShell host that Store updates can terminate'
-Assert-Equal (Test-StorePowerShellHost 'C:\Program Files\PowerShell\7') $false 'Allow the MSI PowerShell runtime'
-Assert-Equal (Test-StorePowerShellHost 'C:\Users\ADM\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell') $false 'Allow the existing portable runtime outside Store'
 $runtimeCapture = Invoke-NativeCapture -Executable $env:ComSpec -Arguments @('/d','/c','call',(Join-Path $PSScriptRoot 'Run-WeeklyMaintenance.cmd'),'--runtime-path')
 Assert-Equal $runtimeCapture.ExitCode 0 'Resolve the launcher runtime without starting updates'
 Assert-Equal ((Test-Path -LiteralPath $runtimeCapture.Output.Trim()) -and $runtimeCapture.Output.Trim() -notmatch '\\WindowsApps\\') $true 'Launcher selects an existing runtime outside Microsoft Store'

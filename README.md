@@ -34,7 +34,7 @@ A collection of PowerShell, Batch, and VBScript automation scripts for Windows a
 Comprehensive weekly Windows maintenance and update automation suite located in `WeeklyMaintenance/`.
 - Orchestrates sequential updates across Windows Update (WUA API), Microsoft Store (`store.exe`), Patch My PC Home Updater, winget, Codex CLI, and Driver Booster.
 - Direct update execution via `Run-WeeklyMaintenance.cmd` or PowerShell 7 (`Update-WeeklyMaintenance.ps1`).
-- Includes safety mechanisms: named mutex (`Local\WeeklyMaintenanceController`) against concurrent runs, safe reboot prompt (requires exact `RESTART` confirmation), optional Driver Booster skip (`-SkipDriverBooster`), optional Codex CLI skip (`-SkipCodexCli`), and structured logging in `Logs/`.
+- Includes safety mechanisms: named mutex (`Local\WeeklyMaintenanceController`) against concurrent runs, safe reboot prompt (requires exact `RESTART` confirmation), and structured logging in `Logs/`.
 - Offline test suite in `WeeklyMaintenance/Test-WeeklyMaintenance.ps1`.
 
 ### AOVPN/

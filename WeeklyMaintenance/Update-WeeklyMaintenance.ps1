@@ -4,16 +4,9 @@
 Weekly Windows maintenance script: updates Windows, Microsoft Store apps, Patch My PC apps, winget packages, Codex CLI, and Driver Booster drivers.
 .EXAMPLE
 pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1
-pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster -SkipCodexCli -NoRebootPrompt
 #>
 [CmdletBinding()]
-param(
-    [switch]$SkipDriverBooster,
-    [switch]$SkipCodexCli,
-    [switch]$NoRebootPrompt,
-    [switch]$StoreOnly,
-    [string]$ExpectedUserSid
-)
+param()
 
 function New-StageResult {
     param([string]$Name, [string]$Status, [string]$Detail, [bool]$RebootRequired = $false)
@@ -58,7 +51,6 @@ function Get-MaintenanceExitCode {
 function Invoke-MaintenanceStages {
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary]$Actions,
-        [switch]$NoRebootPrompt,
         [scriptblock]$PromptAction = { Read-Host 'All stages have ended. Type RESTART to reboot, or press Enter to keep working' },
         [scriptblock]$RestartAction = { Restart-Computer -Confirm:$false },
         [scriptblock]$OnCompleted = { param($Summary) }
@@ -87,9 +79,7 @@ function Invoke-MaintenanceStages {
     }
     & $OnCompleted $summary
     # This is the only path to a reboot: after every stage and final reporting.
-    if (-not $NoRebootPrompt) {
-        if (Test-RestartAnswer (& $PromptAction)) { & $RestartAction }
-    }
+    if (Test-RestartAnswer (& $PromptAction)) { & $RestartAction }
     $summary
 }
 
@@ -210,8 +200,6 @@ function Find-DriverBooster {
 }
 
 function Invoke-DriverStage {
-    param([switch]$Skip)
-    if ($Skip) { return New-StageResult 'Driver Booster' 'Skipped' 'Skipped by command-line option' }
     $path = Find-DriverBooster
     if (-not $path) { throw 'Driver Booster executable not found.' }
     Write-Host 'In Driver Booster: leave automatic reboot/shutdown OFF, install the desired drivers,' -ForegroundColor Yellow
@@ -406,8 +394,7 @@ function Invoke-WingetStage {
 }
 
 function Invoke-CodexCliStage {
-    param([Parameter(Mandatory)][string]$LogDirectory, [switch]$Skip)
-    if ($Skip) { return New-StageResult 'Codex CLI' 'Skipped' 'Skipped by command-line option' }
+    param([Parameter(Mandatory)][string]$LogDirectory)
     $path = (Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue)?.Source
     if (-not $path) {
         $path = (Get-Command pwsh.exe -CommandType Application -ErrorAction Stop).Source
@@ -431,26 +418,14 @@ function Test-IsAdministrator {
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Test-StorePowerShellHost {
-    param([Parameter(Mandatory)][string]$RuntimeHome)
-    $RuntimeHome -match '(?i)[\\/]WindowsApps[\\/]Microsoft\.PowerShell_'
-}
-
 function Get-MaintenanceStageOrder {
-    param([switch]$StoreOnly)
-    if ($StoreOnly) { return 'Microsoft Store' }
     @('Windows Update', 'Microsoft Store', 'Patch My PC', 'winget', 'Codex CLI', 'Driver Booster')
 }
 
 function Request-MaintenanceElevation {
-    param([string]$ScriptPath, [switch]$SkipDriverBooster, [switch]$SkipCodexCli, [switch]$NoRebootPrompt, [switch]$StoreOnly)
+    param([string]$ScriptPath)
     $quotedPath = $ScriptPath.Replace("'", "''")
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $command = "& '$quotedPath' -ExpectedUserSid '$sid'"
-    if ($SkipDriverBooster) { $command += ' -SkipDriverBooster' }
-    if ($SkipCodexCli) { $command += ' -SkipCodexCli' }
-    if ($NoRebootPrompt) { $command += ' -NoRebootPrompt' }
-    if ($StoreOnly) { $command += ' -StoreOnly' }
+    $command = "& '$quotedPath'"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     Write-Host 'Approve administrator access once. The complete routine will use one elevated terminal.'
     $null = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -Verb RunAs -WindowStyle Normal -PassThru -ArgumentList @('-NoProfile', '-EncodedCommand', $encoded)
@@ -459,15 +434,9 @@ function Request-MaintenanceElevation {
 function Start-Maintenance {
     if (-not $IsWindows) { throw 'This script requires Windows and PowerShell 7.' }
     $ErrorActionPreference = 'Stop'
-    if (Test-StorePowerShellHost $PSHOME) {
-        throw 'Microsoft Store can terminate its PowerShell host while updating it. Use Run-WeeklyMaintenance.cmd with a non-Store PowerShell 7 runtime (MSI or portable).'
-    }
     if (-not (Test-IsAdministrator)) {
-        Request-MaintenanceElevation -ScriptPath $PSCommandPath -SkipDriverBooster:$SkipDriverBooster -SkipCodexCli:$SkipCodexCli -NoRebootPrompt:$NoRebootPrompt -StoreOnly:$StoreOnly
+        Request-MaintenanceElevation -ScriptPath $PSCommandPath
         return
-    }
-    if ($ExpectedUserSid -and [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $ExpectedUserSid) {
-        throw 'Approve elevation using the same Windows account.'
     }
     [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
     $mutex = [Threading.Mutex]::new($false, 'Local\WeeklyMaintenanceController')
@@ -481,14 +450,14 @@ function Start-Maintenance {
         try {
             Write-Host "Mode: INSTALL UPDATES. Logs: $runPath"
             $actions = [ordered]@{}
-            foreach ($stage in (Get-MaintenanceStageOrder -StoreOnly:$StoreOnly)) {
+            foreach ($stage in (Get-MaintenanceStageOrder)) {
                 $actions[$stage] = switch ($stage) {
                     'Windows Update' { { Invoke-WindowsStage -LogDirectory $runPath } }
                     'Microsoft Store' { { Invoke-StoreStage -LogDirectory $runPath } }
                     'Patch My PC' { { Invoke-PatchStage -LogDirectory $runPath } }
                     'winget' { { Invoke-WingetStage -LogDirectory $runPath } }
-                    'Codex CLI' { { Invoke-CodexCliStage -LogDirectory $runPath -Skip:$SkipCodexCli } }
-                    'Driver Booster' { { Invoke-DriverStage -Skip:$SkipDriverBooster } }
+                    'Codex CLI' { { Invoke-CodexCliStage -LogDirectory $runPath } }
+                    'Driver Booster' { { Invoke-DriverStage } }
                 }
             }
             $onCompleted = {
@@ -499,7 +468,7 @@ function Start-Maintenance {
                 $Summary.Stages | Format-Table Name, Status, Detail -Wrap | Out-Host
                 Write-Host "Full results: $runPath"
             }
-            $summary = Invoke-MaintenanceStages -Actions $actions -NoRebootPrompt:$NoRebootPrompt -OnCompleted $onCompleted
+            $summary = Invoke-MaintenanceStages -Actions $actions -OnCompleted $onCompleted
         } finally { Stop-Transcript | Out-Null }
     } finally {
         if ($locked) { $mutex.ReleaseMutex() }

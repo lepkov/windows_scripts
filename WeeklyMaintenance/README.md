@@ -17,7 +17,7 @@ It orchestrates 6 sequential update stages:
 ### Option 1: Batch Launcher
 Double-click **`Run-WeeklyMaintenance.cmd`** or run it from any terminal. It validates PowerShell 7 availability and forwards any command-line arguments to the script.
 
-The launcher prefers an existing non-Store PowerShell installation: the MSI installation under Program Files, then Codex's bundled portable runtime when present. This prevents a Store PowerShell update from closing the updater itself. Direct execution in Store-managed PowerShell is rejected before updates start. `Run-WeeklyMaintenance.cmd --runtime-path` prints the selected runtime without installing anything.
+The launcher prefers an existing non-Store PowerShell installation: the MSI installation under Program Files, then Codex's bundled portable runtime when present. This prevents a Store PowerShell update from closing the updater itself. `Run-WeeklyMaintenance.cmd --runtime-path` prints the selected runtime without installing anything.
 
 ### Option 2: PowerShell Direct Execution
 Run via a non-Store PowerShell 7 runtime (`pwsh`); use the batch launcher if your default `pwsh` comes from Microsoft Store:
@@ -25,24 +25,6 @@ Run via a non-Store PowerShell 7 runtime (`pwsh`); use the batch launcher if you
 ```powershell
 # Run full weekly maintenance
 pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1
-
-# Run without Driver Booster interactive GUI
-pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster
-
-# Run without Driver Booster or Codex CLI
-pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster -SkipCodexCli
-
-# Run unattended without asking for a reboot at the end
-pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -NoRebootPrompt
-
-# Combined: skip Driver Booster and do not prompt for reboot
-pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster -NoRebootPrompt
-
-# Combined: skip Driver Booster, skip Codex CLI, and do not prompt for reboot
-pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -SkipDriverBooster -SkipCodexCli -NoRebootPrompt
-
-# Retry only Microsoft Store updates
-pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1 -StoreOnly -NoRebootPrompt
 ```
 
 ---
