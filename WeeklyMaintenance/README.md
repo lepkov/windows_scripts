@@ -44,6 +44,8 @@ pwsh -NoProfile -File .\Update-WeeklyMaintenance.ps1
 
 Close apps that use OBS Virtual Camera before updating OBS Studio. In a live run, Antigravity and Claude had its DLL loaded and blocked the installer; after exiting both apps, OBS updated successfully. The routine leaves app closure to the user.
 
+Patch My PC may report Veeam Agent for Microsoft Windows exit code `1000` as a failure. The weekly summary counts that specific result as an update because [Veeam documents it as success](https://helpcenter.veeam.com/docs/agentforwindows/userguide/installation_unattended.html?ver=13). The raw vendor log retains the original message.
+
 ---
 
 ## Testing

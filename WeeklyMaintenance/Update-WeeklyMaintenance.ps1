@@ -1,4 +1,4 @@
-#requires -Version 7.0
+﻿#requires -Version 7.0
 <#
 .SYNOPSIS
 Weekly Windows maintenance script: updates Windows, Microsoft Store apps, Patch My PC apps, winget packages, Codex CLI, and Driver Booster drivers.
@@ -375,7 +375,14 @@ function Get-PatchUpdateSummary {
             if (-not $updated.Contains($Matches[1])) { $updated.Add($Matches[1]) }
         }
         # Match the severity field, not the word "error" inside a WARNING message.
-        if ($line -match '^\s*(?:\[?\d{4}-\d{2}-\d{2} [\d:.+-]+\]?\s*)?(?:\[ERROR\]|ERROR)(?:\s|$)') { $errors.Add($line) }
+        if ($line -match '^\s*(?:\[?\d{4}-\d{2}-\d{2} [\d:.+-]+\]?\s*)?(?:\[ERROR\]|ERROR)(?:\s|$)') {
+            # Veeam Agent's unattended installer uses 1000 for success.
+            if ($line -match '\[(Veeam Agent for Microsoft Windows)\]: Failed to install application:\s*1000[.\s]*$') {
+                if (-not $updated.Contains($Matches[1])) { $updated.Add($Matches[1]) }
+            } else {
+                $errors.Add($line)
+            }
+        }
     }
     [pscustomobject]@{ UpdatedApps = $updated.ToArray(); HasErrors = ($errors.Count -gt 0); Errors = $errors.ToArray() }
 }

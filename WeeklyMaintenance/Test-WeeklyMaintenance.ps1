@@ -1,4 +1,4 @@
-#requires -Version 7.0
+﻿#requires -Version 7.0
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\Update-WeeklyMaintenance.ps1"
 $script:Checks = 0
@@ -61,6 +61,17 @@ $warningOnly = Get-PatchUpdateSummary @(
     '[2026-10-26 14:05:23]  INFO  Application OBS Studio has been successfully updated'
 )
 Assert-Equal $warningOnly.HasErrors $false 'A warning containing the word error is not an ERROR severity record'
+$veeamResult = Get-PatchUpdateSummary @(
+    '[2026-11-09 18:02:36]  ERROR  System.InvalidOperationException: [Veeam Agent for Microsoft Windows]: Failed to install application: 1000 .',
+    '[2026-11-09 18:02:36]  ERROR  Failed to perform operation for application due to an error [Veeam Agent for Microsoft Windows]: Failed to install application: 1000 ..'
+)
+Assert-Equal ($veeamResult.UpdatedApps -join ',') 'Veeam Agent for Microsoft Windows' 'Recognize Veeam code 1000 as success once'
+Assert-Equal $veeamResult.HasErrors $false 'Do not report documented Veeam success as a failure'
+$otherErrors = Get-PatchUpdateSummary @(
+    '[2026-11-09 18:02:36]  ERROR  [Veeam Agent for Microsoft Windows]: Failed to install application: 1002 .',
+    '[2026-11-09 18:02:36]  ERROR  [Other App]: Failed to install application: 1000 .'
+)
+Assert-Equal $otherErrors.Errors.Count 2 'Preserve Veeam failures and code 1000 errors from other apps'
 
 # 5. Maintenance stage ordering
 $defaultOrder = Get-MaintenanceStageOrder
