@@ -24,13 +24,8 @@ function Get-WindowsUpdateDecision {
         $reason = 'Firmware requires separate review'
     } elseif ($Candidate.CanRequestUserInput) {
         $reason = 'May require input during Windows installation'
-    } elseif ($Candidate.BrowseOnly -and $Candidate.Type -ne 2 -and
-        -not @($Candidate.CategoryIDs | Where-Object { $_ -in @(
-            '0fa1201d-4330-4fa8-8ae9-b877473b6441', # Security updates
-            'e6cf1350-c01b-414d-a61f-263d14d133b4', # Critical updates
-            'e0789628-ce08-4437-be74-2495b842f43b'  # Definition updates
-        ) }).Count) {
-        $reason = 'Optional software: stable release not established; review KB manually'
+    } elseif ($Candidate.BrowseOnly) {
+        $reason = 'Optional update excluded'
     }
     [pscustomobject]@{ Install = ($reason -eq ''); Reason = $(if ($reason) { $reason } else { 'Eligible non-preview update' }) }
 }
@@ -290,8 +285,20 @@ function Get-StorePendingCount {
     return $null
 }
 
+function Request-StoreUpdateScan {
+    param([Parameter(Mandatory)][string]$LogDirectory)
+    # Request a fresh native Store scan before consulting the CLI's update list.
+    $scan = Get-CimInstance -Namespace 'root/cimv2/mdm/dmmap' -ClassName 'MDM_EnterpriseModernAppManagement_AppManagement01' -ErrorAction Stop |
+        Invoke-CimMethod -MethodName UpdateScanMethod -ErrorAction Stop
+    $scan | Select-Object ReturnValue | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogDirectory 'store-native-scan.json') -Encoding utf8
+    if ($scan.ReturnValue -ne 0) { throw "Native Store scan request failed: $($scan.ReturnValue)" }
+    Write-Host 'Native Store update scan requested. Waiting 60 seconds before applying CLI updates.'
+    Start-Sleep -Seconds 60
+}
+
 function Invoke-StoreStage {
     param([Parameter(Mandatory)][string]$LogDirectory)
+    Request-StoreUpdateScan -LogDirectory $LogDirectory
     $path = (Get-Command store.exe -CommandType Application -ErrorAction Stop).Source
     $arguments = @('updates', '--apply')
     $result = Invoke-NativeCapture $path $arguments
@@ -321,7 +328,7 @@ function Wait-StoreCompletion {
         $remaining = Get-StorePendingCount $verify.Output
         if ($verify.ExitCode -ne 0 -or $null -eq $remaining) { break }
         if ($remaining -eq 0) {
-            return New-StageResult 'Microsoft Store' 'Verified' 'Follow-up Store scan reports no available updates'
+            return New-StageResult 'Microsoft Store' 'NeedsAttention' 'CLI reports no updates after the native scan request; confirm in Store Downloads because this CLI can miss system component updates'
         }
         Write-Host "$remaining Store update(s) still queued; non-interactive retry requested ($attempt/$VerificationAttempts)."
         if ($attempt -lt $VerificationAttempts) { Start-Sleep -Seconds $DelaySeconds }

@@ -17,9 +17,9 @@ foreach ($title in @('2026-10 Cumulative Update Preview (KB123)', 'Предва�
 $candidate = New-Candidate; $candidate.IsBeta=$true
 Assert-Equal (Get-WindowsUpdateDecision $candidate).Install $false 'Exclude beta metadata'
 Assert-Equal (Get-WindowsUpdateDecision (New-Candidate 'Stable required update')).Install $true 'Include required stable update'
-Assert-Equal (Get-WindowsUpdateDecision (New-Candidate 'Intel driver' $true 2)).Install $true 'Include optional driver'
+Assert-Equal (Get-WindowsUpdateDecision (New-Candidate 'Intel driver' $true 2)).Install $false 'Exclude optional driver'
 Assert-Equal (Get-WindowsUpdateDecision (New-Candidate 'Optional cumulative update' $true)).Install $false 'Defer ambiguous optional software'
-Assert-Equal (Get-WindowsUpdateDecision (New-Candidate 'Security Update' $true 1 @('0fa1201d-4330-4fa8-8ae9-b877473b6441'))).Install $true 'Include optional classified security update'
+Assert-Equal (Get-WindowsUpdateDecision (New-Candidate 'Security Update' $true 1 @('0fa1201d-4330-4fa8-8ae9-b877473b6441'))).Install $false 'Exclude optional classified security update'
 Assert-Equal (Get-WindowsUpdateDecision (New-Candidate 'Windows version upgrade' $false 1 @('3689bdc8-b205-4af4-8d4a-a63924c5e9d5'))).Install $false 'Defer feature upgrade'
 Assert-Equal (Get-WindowsUpdateDecision (New-Candidate 'Contoso - Firmware - 1.2' $true 2)).Install $false 'Defer firmware'
 $candidate = New-Candidate; $candidate.CanRequestUserInput = $true
@@ -166,6 +166,8 @@ Assert-Equal $partialLines[0] '[INFO] Обновление завершено' '
 Read-UpdaterProgress -LogTailPath $partialLog -State $partialState -Lines $partialLines
 Assert-Equal $partialLines.Count 1 'Do not duplicate log records when polling'
 
+$scanImplementation = ${function:Request-StoreUpdateScan}
+function Request-StoreUpdateScan { param($LogDirectory) }
 $nativeImplementation = ${function:Invoke-NativeCapture}
 try {
     $script:CapturedArgs = [Collections.Generic.List[string]]::new()
@@ -183,11 +185,13 @@ try {
         [pscustomobject]@{ ExitCode=0; Output=$(if ($script:StoreScanNumber -eq 1) { 'Updates started (1)' } else { 'No updates found.' }) }
     }
     $storeResult = Wait-StoreCompletion -Executable 'fixture-store.exe' -LogDirectory $testOutput -VerificationAttempts 2 -DelaySeconds 0
-    Assert-Equal $storeResult.Status 'Verified' 'Wait for queued Store installations instead of failing immediately'
+    Assert-Equal $storeResult.Status 'NeedsAttention' 'Empty CLI queue cannot verify all Store updates'
     Assert-Equal $script:StoreScanNumber 2 'Rescan after Store reports remaining queued update'
-} finally { Set-Item -Path function:Invoke-NativeCapture -Value $nativeImplementation }
+} finally { Set-Item -Path function:Invoke-NativeCapture -Value $nativeImplementation; Set-Item -Path function:Request-StoreUpdateScan -Value $scanImplementation }
 
 # 10. Codex CLI stage
+$scanImplementation = ${function:Request-StoreUpdateScan}
+function Request-StoreUpdateScan { param($LogDirectory) }
 $nativeImplementation = ${function:Invoke-NativeCapture}
 try {
     $script:CodexArgs = $null
@@ -200,7 +204,7 @@ try {
     Assert-Equal $codexResult.Detail 'Codex CLI 0.160.1 installed successfully' 'Codex CLI reports version details'
     Assert-Equal ($script:CodexArgs -match 'chatgpt\.com/codex/install\.ps1') $true 'Invoke Codex install script'
     Assert-Equal ($script:CodexArgs -match 'CODEX_NON_INTERACTIVE') $true 'Enforce non-interactive execution for Codex installer'
-} finally { Set-Item -Path function:Invoke-NativeCapture -Value $nativeImplementation }
+} finally { Set-Item -Path function:Invoke-NativeCapture -Value $nativeImplementation; Set-Item -Path function:Request-StoreUpdateScan -Value $scanImplementation }
 
 # 11. Elevation without launching process
 $startProcessImplementation = Get-Item function:Start-Process -ErrorAction SilentlyContinue
